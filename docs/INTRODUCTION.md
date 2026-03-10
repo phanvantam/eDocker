@@ -19,6 +19,7 @@ Get an immediate overview of your system's health. Monitor resources and see exa
 Beyond just starting and stopping. Access interactive terminals, stream real-time logs, and inspect detailed metadata with a single click.
 
 ![Container Management](./images/container.png)
+![Container Actions](./images/container-action.png)
 
 ### 🧹 Smart Cleanup
 Keep your development environment lean. Our dedicated cleanup tool identifies dangling images, unused volumes, and stopped containers that are eating up your disk space.
