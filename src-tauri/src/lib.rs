@@ -81,7 +81,19 @@ fn get_docker_cli_path() -> String {
             }
         }
     }
-    // Fallback: hope it's on PATH (works in dev mode and most Windows setups)
+    #[cfg(windows)]
+    {
+        let common_paths = [
+            r"C:\Program Files\Docker\Docker\resources\bin\docker.exe",
+            r"C:\ProgramData\DockerDesktop\version-bin\docker.exe",
+        ];
+        for p in &common_paths {
+            if std::path::Path::new(p).exists() {
+                return p.to_string();
+            }
+        }
+    }
+    // Fallback: hope it's on PATH (works in dev mode and most setups)
     "docker".to_string()
 }
 

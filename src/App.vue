@@ -138,7 +138,7 @@ async function saveHostAndRetry() {
   // Save the new host if changed
   if (modalDockerHost.value !== currentDockerHost.value) {
     try {
-      await invoke('save_docker_config', { config: { docker_host: modalDockerHost.value } });
+      await invoke('update_docker_config', { config: { docker_host: modalDockerHost.value } });
       currentDockerHost.value = modalDockerHost.value;
     } catch (e: any) {
       dockerError.value = 'Failed to save config: ' + e?.toString();
