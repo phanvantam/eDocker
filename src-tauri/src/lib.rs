@@ -64,6 +64,27 @@ impl AppState {
     }
 }
 
+/// Find the docker CLI binary path across platforms.
+/// Bundled apps don't inherit the user's shell PATH, so we search common locations.
+fn get_docker_cli_path() -> String {
+    #[cfg(unix)]
+    {
+        let common_paths = [
+            "/usr/local/bin/docker",
+            "/usr/bin/docker",
+            "/opt/homebrew/bin/docker",
+            "/Applications/Docker.app/Contents/Resources/bin/docker",
+        ];
+        for p in &common_paths {
+            if std::path::Path::new(p).exists() {
+                return p.to_string();
+            }
+        }
+    }
+    // Fallback: hope it's on PATH (works in dev mode and most Windows setups)
+    "docker".to_string()
+}
+
 fn get_docker(state: State<AppState>) -> Result<Docker, String> {
     let host = state.config.lock().unwrap().docker_host.clone();
     if host.is_empty() {
@@ -493,7 +514,7 @@ async fn launch_compose(app: tauri::AppHandle, state: State<'_, AppState>, yaml:
 
     let host = state.config.lock().unwrap().docker_host.clone();
 
-    let mut cmd = tokio::process::Command::new("docker");
+    let mut cmd = tokio::process::Command::new(&get_docker_cli_path());
     cmd.args(["compose", "-f", file_path.to_str().unwrap(), "-p", &project_name, "up", "-d"]);
     
     if !host.is_empty() {
@@ -536,7 +557,7 @@ async fn launch_compose(app: tauri::AppHandle, state: State<'_, AppState>, yaml:
 #[tauri::command]
 async fn get_system_df(state: State<'_, AppState>) -> Result<Vec<Value>, String> {
     let host = state.config.lock().unwrap().docker_host.clone();
-    let mut cmd = tokio::process::Command::new("docker");
+    let mut cmd = tokio::process::Command::new(&get_docker_cli_path());
     cmd.args(["system", "df", "--format", "{{json .}}"]);
     if !host.is_empty() {
         cmd.env("DOCKER_HOST", host);
@@ -558,7 +579,7 @@ async fn get_system_df(state: State<'_, AppState>) -> Result<Vec<Value>, String>
 #[tauri::command]
 async fn execute_prune(state: State<'_, AppState>, target: String) -> Result<String, String> {
     let host = state.config.lock().unwrap().docker_host.clone();
-    let mut cmd = tokio::process::Command::new("docker");
+    let mut cmd = tokio::process::Command::new(&get_docker_cli_path());
     
     match target.as_str() {
         "all" => cmd.args(["system", "prune", "-a", "--volumes", "-f"]),
