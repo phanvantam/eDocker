@@ -71,8 +71,15 @@ fn get_docker(state: State<AppState>) -> Result<Docker, String> {
     }
     
     if host.starts_with("unix://") {
-        Docker::connect_with_unix(&host[7..], 120, bollard::API_DEFAULT_VERSION)
-            .map_err(|e: bollard::errors::Error| e.to_string())
+        #[cfg(unix)]
+        {
+            Docker::connect_with_unix(&host[7..], 120, bollard::API_DEFAULT_VERSION)
+                .map_err(|e: bollard::errors::Error| e.to_string())
+        }
+        #[cfg(not(unix))]
+        {
+            Err("Unix sockets are not supported on this platform".to_string())
+        }
     } else if host.starts_with("npipe://") {
         #[cfg(target_os = "windows")]
         {
@@ -92,11 +99,18 @@ fn get_docker(state: State<AppState>) -> Result<Docker, String> {
         Docker::connect_with_http(&url, 120, bollard::API_DEFAULT_VERSION)
             .map_err(|e: bollard::errors::Error| e.to_string())
     } else {
-        // Assume it might be just a path for unix socket if it doesn't have scheme
-        if host.starts_with('/') {
-             Docker::connect_with_unix(&host, 120, bollard::API_DEFAULT_VERSION)
-                .map_err(|e: bollard::errors::Error| e.to_string())
-        } else {
+        // Assume it might be just a path for unix socket or named pipe
+        #[cfg(unix)]
+        {
+            if host.starts_with('/') {
+                Docker::connect_with_unix(&host, 120, bollard::API_DEFAULT_VERSION)
+                    .map_err(|e: bollard::errors::Error| e.to_string())
+            } else {
+                Docker::connect_with_local_defaults().map_err(|e: bollard::errors::Error| e.to_string())
+            }
+        }
+        #[cfg(not(unix))]
+        {
             Docker::connect_with_local_defaults().map_err(|e: bollard::errors::Error| e.to_string())
         }
     }
