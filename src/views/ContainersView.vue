@@ -1,7 +1,7 @@
 <template>
-  <div class="flex h-full">
+  <div class="flex flex-col h-full">
     <!-- Container List -->
-    <div class="flex-1 p-6 space-y-4 overflow-y-auto">
+    <div class="flex-1 p-6 space-y-4 overflow-y-auto min-h-[200px]">
       <div class="flex items-center justify-between">
         <div>
           <h2 class="text-xl font-semibold text-white">Containers</h2>
@@ -21,7 +21,7 @@
         <p class="text-[var(--color-muted)] text-sm">No containers found</p>
       </div>
 
-      <div v-else class="space-y-3">
+      <div v-else class="space-y-3 pb-4">
         <div v-for="(containers, group) in groupedContainers" :key="group" class="rounded-xl border border-[var(--color-border)] overflow-hidden">
           <button @click="toggleGroup(group as string)" class="w-full flex items-center gap-2.5 px-4 py-2 bg-[var(--color-surface-alt)] hover:bg-[var(--color-surface-hover)] transition text-left group">
             <AppIcon name="chevron" :size="12" class="transition-transform" :class="expandedGroups.has(group as string) ? 'rotate-90' : ''" />
@@ -75,8 +75,19 @@
       </div>
     </div>
 
-    <!-- Detail Panel -->
-    <div v-if="selectedContainer" class="w-[400px] border-l border-[var(--color-border)] flex flex-col bg-[var(--color-surface-alt)] shrink-0">
+    <!-- User Resizer Handle -->
+    <div 
+      v-if="selectedContainer" 
+      @mousedown="startResize"
+      class="h-1.5 bg-[var(--color-border)] hover:bg-[var(--color-accent)] cursor-ns-resize transition-colors w-full shrink-0 z-10 opacity-50 hover:opacity-100"
+    ></div>
+
+    <!-- Detail Panel (Bottom) -->
+    <div 
+      v-if="selectedContainer" 
+      class="border-t border-[var(--color-border)] flex flex-col bg-[var(--color-surface-alt)] shrink-0"
+      :style="{ height: panelHeight + 'px' }"
+    >
       <div class="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
         <div class="min-w-0">
           <p class="text-sm font-medium text-white truncate">{{ containerName(selectedContainer) }}</p>
@@ -99,9 +110,9 @@
           {{ tab.label }}
         </button>
       </div>
-      <!-- Tab Content -->
       <div class="flex-1 overflow-hidden">
         <ContainerLogs v-if="activeTab === 'logs'" :containerId="selectedContainer.Id" :name="containerName(selectedContainer)" />
+        <ContainerTerminal v-else-if="activeTab === 'terminal'" :containerId="selectedContainer.Id" :name="containerName(selectedContainer)" />
         <ContainerInfo v-else-if="activeTab === 'info'" :containerId="selectedContainer.Id" :name="containerName(selectedContainer)" />
       </div>
     </div>
@@ -144,12 +155,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import AppIcon from '../components/AppIcon.vue';
 import ContextMenu from '../components/ContextMenu.vue';
 import ContainerLogs from '../components/ContainerLogs.vue';
 import ContainerInfo from '../components/ContainerInfo.vue';
+import ContainerTerminal from '../components/ContainerTerminal.vue';
 import type { MenuItem } from '../components/ContextMenu.vue';
 
 const allContainers = ref<any[]>([]);
@@ -170,6 +182,7 @@ const ctxItems = ref<MenuItem[]>([]);
 
 const detailTabs = [
   { id: 'logs', label: 'Logs', icon: 'logs' },
+  { id: 'terminal', label: 'Terminal', icon: 'terminal' },
   { id: 'info', label: 'Info', icon: 'info' },
 ];
 
@@ -215,6 +228,7 @@ function openCtx(e: MouseEvent, container: any) {
     ...(container.State === 'paused' ? [{ label: 'Unpause', icon: 'play', action: () => action('unpause_container', container.Id) }] : []),
     { separator: true },
     { label: 'View Logs', icon: 'logs', action: () => { selectContainer(container); activeTab.value = 'logs'; } },
+    { label: 'Terminal', icon: 'terminal', action: () => { selectContainer(container); activeTab.value = 'terminal'; } },
     { label: 'Info', icon: 'info', action: () => { selectContainer(container); activeTab.value = 'info'; } },
     { separator: true },
     { label: 'Delete', icon: 'trash', danger: true, action: () => confirmRemove(container) },
@@ -276,4 +290,44 @@ async function doRemoveGroup() {
 }
 
 onMounted(() => fetchContainers());
+// Context Menu & Actions
+// ... (omitting some lines, scroll to bottom of script)
+
+// Resizing logic for Bottom Panel
+const panelHeight = ref(300);
+let isResizing = false;
+
+function startResize() {
+  isResizing = true;
+  document.body.style.cursor = 'ns-resize';
+  // Prevent content selection while dragging
+  document.body.style.userSelect = 'none';
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', stopResize);
+}
+
+function onMouseMove(e: MouseEvent) {
+  if (!isResizing) return;
+  // Calculate new height based on mouse Y position from the bottom of the active window
+  // window.innerHeight - e.clientY gives us the height from the mouse to bottom.
+  const newHeight = window.innerHeight - e.clientY;
+  
+  // Set boundaries (min 150px, max 80% of window height)
+  if (newHeight >= 150 && newHeight <= window.innerHeight * 0.8) {
+    panelHeight.value = newHeight;
+  }
+}
+
+function stopResize() {
+  isResizing = false;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  window.removeEventListener('mousemove', onMouseMove);
+  window.removeEventListener('mouseup', stopResize);
+}
+
+// Ensure cleanup on unmount
+onUnmounted(() => {
+  stopResize();
+});
 </script>

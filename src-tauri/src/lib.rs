@@ -6,11 +6,14 @@ use bollard::query_parameters::{
     ListNetworksOptionsBuilder, InspectNetworkOptionsBuilder,
     RemoveVolumeOptionsBuilder, PruneVolumesOptionsBuilder,
 };
+use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
 use bollard::models::NetworkCreateRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use futures_util::StreamExt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
+use dashmap::DashMap;
 use tauri::{State, Manager};
 
 // ── Configuration ────────────────────────────────────────
@@ -31,6 +34,7 @@ impl Default for DockerConfig {
 pub struct AppState {
     pub config: Mutex<DockerConfig>,
     pub config_path: std::path::PathBuf,
+    pub terminal_sessions: Arc<DashMap<String, mpsc::Sender<Vec<u8>>>>,
 }
 
 impl AppState {
@@ -46,6 +50,7 @@ impl AppState {
         Self {
             config: Mutex::new(config),
             config_path: path,
+            terminal_sessions: Arc::new(DashMap::new()),
         }
     }
 
@@ -214,6 +219,106 @@ async fn remove_container(state: State<'_, AppState>, id: &str) -> Result<(), St
     let docker = get_docker(state)?;
     let options = Some(RemoveContainerOptions { force: true, v: false, link: false });
     docker.remove_container(id, options).await.map_err(|e| e.to_string())
+}
+
+// ── Terminal ─────────────────────────────────────────────
+
+#[tauri::command]
+async fn start_terminal(app: tauri::AppHandle, state: State<'_, AppState>, container_id: String, cols: u16, rows: u16) -> Result<String, String> {
+    use tauri::Emitter;
+    let docker = get_docker(state.clone())?;
+    
+    // 1. Create Exec
+    let config = CreateExecOptions {
+        attach_stdout: Some(true),
+        attach_stderr: Some(true),
+        attach_stdin: Some(true),
+        tty: Some(true),
+        cmd: Some(vec!["/bin/sh"]),
+        env: Some(vec!["TERM=xterm"]),
+        ..Default::default()
+    };
+    
+    let exec = docker.create_exec(&container_id, config).await.map_err(|e| e.to_string())?;
+    
+    // 2. Start Exec
+    let start_config = StartExecOptions {
+        detach: false,
+        ..Default::default()
+    };
+    
+    let res = docker.start_exec(&exec.id, Some(start_config)).await.map_err(|e| e.to_string())?;
+
+    // 3. Handle streams
+    if let StartExecResults::Attached { mut output, mut input } = res {
+        // Resize initially
+        let resize_opt = bollard::exec::ResizeExecOptions {
+            height: rows,
+            width: cols,
+        };
+        let _ = docker.resize_exec(&exec.id, resize_opt).await;
+
+        let exec_id_clone = exec.id.clone();
+        let emit_topic = format!("terminal-output-{}", container_id);
+
+        // Tokio Task to continuously read output from Docker and emit to frontend
+        tokio::spawn(async move {
+            while let Some(msg) = output.next().await {
+                match msg {
+                    Ok(log_output) => {
+                        let bytes = log_output.into_bytes().to_vec();
+                        let _ = app.emit(&emit_topic, bytes);
+                    }
+                    Err(e) => {
+                        eprintln!("Error reading exec output: {}", e);
+                        break;
+                    }
+                }
+            }
+            // Cleanup on exit
+        });
+
+        // Set up an mpsc channel to receive input from the frontend
+        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(100);
+        
+        // Save sender to app state
+        state.terminal_sessions.insert(exec.id.clone(), tx);
+
+        // Tokio Task to read from channel and write to docker stdin
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            while let Some(data) = rx.recv().await {
+                if let Err(e) = input.write_all(&data).await {
+                    eprintln!("Error writing to exec stdin: {}", e);
+                    break;
+                }
+            }
+        });
+
+        Ok(exec_id_clone)
+    } else {
+        Err("Failed to attach to container exec".to_string())
+    }
+}
+
+#[tauri::command]
+async fn write_terminal(state: State<'_, AppState>, exec_id: String, data: Vec<u8>) -> Result<(), String> {
+    if let Some(tx) = state.terminal_sessions.get(&exec_id) {
+        tx.send(data).await.map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("Session not found".to_string())
+    }
+}
+
+#[tauri::command]
+async fn resize_terminal(state: State<'_, AppState>, exec_id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let docker = get_docker(state)?;
+    let resize_opt = bollard::exec::ResizeExecOptions {
+        height: rows,
+        width: cols,
+    };
+    docker.resize_exec(&exec_id, resize_opt).await.map_err(|e| e.to_string())
 }
 
 // ── Images ───────────────────────────────────────────────
@@ -481,6 +586,7 @@ pub fn run() {
             list_containers, inspect_container, container_logs,
             start_container, stop_container, restart_container,
             pause_container, unpause_container, remove_container,
+            start_terminal, write_terminal, resize_terminal,
             list_images, inspect_image, pull_image, remove_image,
             list_volumes, inspect_volume, remove_volume, prune_volumes,
             list_networks, inspect_network, remove_network, create_network,
